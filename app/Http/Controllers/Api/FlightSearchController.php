@@ -25,7 +25,7 @@ class FlightSearchController extends Controller
     public function search(Request $request)
     {
         $agent = $request->user(); // Authenticated agent from middleware
-
+ 
         // Validate request fields coming from agent portal
         $data = $request->validate([
             'from'      => 'required|string|size:3',
@@ -37,6 +37,8 @@ class FlightSearchController extends Controller
             'children'  => 'nullable|integer|min:0',
             'infants'   => 'nullable|integer|min:0',
         ]);
+
+        
 
         // STEP 3: Send to Aggregator → cache, rules, suppliers
         $offers = $this->aggregator->search($agent, $data);
