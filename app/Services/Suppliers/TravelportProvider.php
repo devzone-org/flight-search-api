@@ -5,15 +5,17 @@ namespace App\Services\Suppliers;
 use App\Services\Contracts\SupplierInterface;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Cache;
+use App\Models\Supplier;
 
 class TravelportProvider implements SupplierInterface
 {
-    // protected Supplier $supplier;
+    protected Supplier $supplier;
 
-    // public function __construct(Supplier $supplier)
-    // {
-    //     $this->supplier = $supplier;
-    // }
+
+    public function __construct(Supplier $supplier)
+    {
+        $this->supplier = $supplier;
+    }
 
     public function code(): string
     {
@@ -21,7 +23,7 @@ class TravelportProvider implements SupplierInterface
     }
 
 
-     /**
+    /**
      * STEP 5: The Aggregator calls this. 
      * This function:
      * - gets token
@@ -30,35 +32,61 @@ class TravelportProvider implements SupplierInterface
      */
     public function searchFlights(array $search): array
     {
-        dd('TravelportProvider searchFlights called',[$search]);
+
         $token = $this->getAccessToken();
 
         $body = $this->buildRequestBody($search);
 
-        $json = Http::withToken($token)
-            //->post($this->supplier->api_base_url.'/catalog/product-offers', $body)
+        $settings = $this->supplier->settings; // JSON field
+        $settings = json_decode($settings, true);
+
+        $creds = $this->supplier->credentials; // JSON field
+        $creds = json_decode($creds, true);
+dd(json_encode($body));
+        $json = Http::withHeaders([
+                'Authorization'=>$token,
+                'Accept' => 'application/json',
+                'Content-Type' => 'application/json',
+                'XAUTH_TRAVELPORT_ACCESSGROUP' => $creds['XAUTH_TRAVELPORT_ACCESSGROUP'] ?? '',
+                'Accept-Version' => $settings['api_version'],
+                'Content-Version' => $settings['api_version'],
+                'taxBreakDown' => true
+            ])
+            ->post($settings['base_url'] . '/air/catalog/search/catalogproductofferings', $body)
             ->throw()
             ->json();
+
+            dd($json);
 
         return $this->transformToCommon($json, $search);
     }
 
-     /**
+    /**
      * Fetch token using OAuth (cached)
      */
     protected function getAccessToken(): string
     {
-        $key = 'tp_token_'.$this->supplier->id;
 
-        return Cache::remember($key, 3400, function () {
+
+
+
+
+
+
+        $key = 'tp_token_' . $this->supplier->id;
+
+        return Cache::remember($key, 85000, function () {
+
+            $creds = $this->supplier->credentials; // JSON field
+            $creds = json_decode($creds, true);
             $resp = Http::asForm()
-                ->post($this->supplier->auth_url, [
-                    'grant_type'    => $this->supplier->grant_type,
-                    'username'      => $this->supplier->username,
-                    'password'      => $this->supplier->password,
-                    'client_id'     => $this->supplier->client_id,
-                    'client_secret' => $this->supplier->client_secret,
-                    'scope'         => $this->supplier->scope,
+                ->post($this->supplier->endpoint, [
+                    'grant_type'    => $creds['grant_type'] ?? null,
+                    'username'      => $creds['username'] ?? null,
+                    'password'      => $creds['password'] ?? null,
+                    'client_id'     => $creds['client_id'] ?? null,
+                    'client_secret' => $creds['client_secret'] ?? null,
+                    'scope'         => $creds['scope'] ?? null,
                 ])
                 ->throw()
                 ->json();
@@ -69,28 +97,68 @@ class TravelportProvider implements SupplierInterface
 
     protected function buildRequestBody(array $search): array
     {
-        $criteria = [
-            [
-                "from" => $search['from'],
-                "to"   => $search['to'],
-                "date" => $search['departure'],
-            ],
-        ];
 
-        if ($search['trip_type'] === 'roundtrip') {
-            $criteria[] = [
-                "from" => $search['to'],
-                "to"   => $search['from'],
-                "date" => $search['return'],
+
+
+        $req = $search; // your search array
+
+        // Build PassengerCriteria dynamically
+        $passengers = [];
+
+        if ($req['adults'] > 0) {
+            $passengers[] = [
+                "@type" => "PassengerCriteria",
+                "number" => $req['adults'],
+                "passengerTypeCode" => "ADT"
             ];
         }
 
+        if ($req['children'] > 0) {
+            $passengers[] = [
+                "@type" => "PassengerCriteria",
+                "number" => $req['children'],
+                "passengerTypeCode" => "CHD"
+            ];
+        }
+
+        if ($req['infants'] > 0) {
+            $passengers[] = [
+                "@type" => "PassengerCriteria",
+                "number" => $req['infants'],
+                "passengerTypeCode" => "INF"
+            ];
+        }
+
+        // Build Flight Search Array
+        $searchCriteriaFlight = [
+            [
+                "@type" => "SearchCriteriaFlight",
+                "departureDate" => $req['departure'],
+                "From" => ["value" => $req['from']],
+                "To"   => ["value" => $req['to']]
+            ]
+        ];
+
+        // Optional round-trip block
+        if ($req['trip_type'] === "round" && $req['return']) {
+            $searchCriteriaFlight[] = [
+                "@type" => "SearchCriteriaFlight",
+                "departureDate" => $req['return'],
+                "From" => ["value" => $req['to']],
+                "To"   => ["value" => $req['from']]
+            ];
+        }
+
+
         return [
-            "SearchCriteriaFlight" => $criteria,
-            "Passengers" => [
-                [
-                    "type"     => "ADT",
-                    "quantity" => $search['adults'],
+            "CatalogProductOfferingsQueryRequest" => [
+                "CatalogProductOfferingsRequest" => [
+                    "@type" => "CatalogProductOfferingsRequestAir",
+                    "offersPerPage" => 15,
+                    "maxNumberOfUpsellsToReturn" => 4,
+                    "contentSourceList" => ["GDS"],
+                    "PassengerCriteria" => $passengers,
+                    "SearchCriteriaFlight" => $searchCriteriaFlight
                 ]
             ]
         ];
