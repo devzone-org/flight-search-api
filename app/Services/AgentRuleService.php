@@ -2,6 +2,7 @@
 
 
 namespace App\Services;
+
 use App\Models\User;
 
 /**
@@ -12,8 +13,8 @@ use App\Models\User;
  */
 class AgentRuleService
 {
-    
-     /**
+
+    /**
      * STEP 3.2:
      * Check if agent is allowed to search a specific route
      * e.g. prevent SKT→DXB
@@ -31,12 +32,9 @@ class AgentRuleService
      */
     public function allowedSuppliersForSearch(User $agent): array
     {
-        // return $agent->suppliers()
-        //     ->wherePivot('allow_search', true)
-        //     ->where('active', true)
-        //     ->get()
-        //     ->all();
-        return []; // allow all for now
+        return \App\Models\Supplier::where('active', 1)
+            ->get()
+            ->all();
     }
 
     /**
@@ -56,7 +54,7 @@ class AgentRuleService
         //         $supplierCode = $offer['supplier'];
         //         $base         = $offer['price']['total'];
         //         $percent      = $markupBySupplier[$supplierCode] ?? 0;
-                
+
         //         $value = round($base * ($percent / 100));
 
         //         $offer['price']['markup_percent']     = $percent;
@@ -68,5 +66,4 @@ class AgentRuleService
         //     ->values()
         //     ->all();
     }
-
 }

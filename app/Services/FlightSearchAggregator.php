@@ -58,7 +58,7 @@ class FlightSearchAggregator
         $cacheKey = $this->buildCacheKey($normalized);
 
         // 4) Cache for 5 minutes
-        $baseOffers = Cache::remember($cacheKey, 300, function () use ($agent, $normalized) {
+        $baseOffers = Cache::remember($cacheKey, 1, function () use ($agent, $normalized) {
             return $this->callSuppliers($agent, $normalized);
         });
 
