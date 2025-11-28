@@ -67,7 +67,7 @@ class FlightSearchAggregator
     }
 
 
-     protected function normalizeSearch(array $search): array
+    protected function normalizeSearch(array $search): array
     {
         return [
             'from'      => strtoupper($search['from']),
@@ -103,5 +103,4 @@ class FlightSearchAggregator
 
         return $allOffers;
     }
-
 }

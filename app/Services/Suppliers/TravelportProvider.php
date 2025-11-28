@@ -30,6 +30,7 @@ class TravelportProvider implements SupplierInterface
      */
     public function searchFlights(array $search): array
     {
+        dd('TravelportProvider searchFlights called');
         $token = $this->getAccessToken();
 
         $body = $this->buildRequestBody($search);
