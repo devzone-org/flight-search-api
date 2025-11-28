@@ -43,8 +43,8 @@ class FlightSearchController extends Controller
         // STEP 3: Send to Aggregator → cache, rules, suppliers
         $offers = $this->aggregator->search($agent, $data);
 
-        return response()->json([
-            'data' => $offers,
-        ]);
+        return response()->json( 
+             $offers,
+        );
     }
 }

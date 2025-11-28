@@ -42,21 +42,22 @@ class TravelportProvider implements SupplierInterface
 
         $creds = $this->supplier->credentials; // JSON field
         $creds = json_decode($creds, true);
-dd(json_encode($body));
+
         $json = Http::withHeaders([
-                'Authorization'=>$token,
-                'Accept' => 'application/json',
-                'Content-Type' => 'application/json',
-                'XAUTH_TRAVELPORT_ACCESSGROUP' => $creds['XAUTH_TRAVELPORT_ACCESSGROUP'] ?? '',
-                'Accept-Version' => $settings['api_version'],
-                'Content-Version' => $settings['api_version'],
-                'taxBreakDown' => true
-            ])
+            'Authorization' => 'Bearer ' . $token,
+            'Accept' => 'application/json',
+            'Content-Type' => 'application/json',
+            'Accept-Encoding' => 'gzip, deflate',
+            'XAUTH_TRAVELPORT_ACCESSGROUP' => $creds['XAUTH_TRAVELPORT_ACCESSGROUP'] ?? '',
+            'Accept-Version' => $settings['api_version'],
+            'Content-Version' => $settings['api_version'],
+            'taxBreakDown' => 'true'
+        ])
             ->post($settings['base_url'] . '/air/catalog/search/catalogproductofferings', $body)
             ->throw()
             ->json();
 
-            dd($json);
+
 
         return $this->transformToCommon($json, $search);
     }
@@ -171,6 +172,7 @@ dd(json_encode($body));
      */
     protected function transformToCommon(array $resp, array $search): array
     {
+        return $resp;
         // Simplified version (complete version already shared earlier)
         $offers = [];
 
