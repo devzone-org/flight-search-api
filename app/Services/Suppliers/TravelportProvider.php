@@ -168,7 +168,7 @@ class TravelportProvider implements SupplierInterface
     }
 
 
-     /**
+    /**
      * Transform raw Travelport JSON into common format:
      *
      * {
@@ -294,7 +294,7 @@ class TravelportProvider implements SupplierInterface
                     ];
                 }
 
-                $itinerary =& $itinerariesByKey[$itiKey];
+                $itinerary = &$itinerariesByKey[$itiKey];
 
                 // For each brand/product/price variant add a fare_option
                 foreach (Arr::get($pbo, 'ProductBrandOffering', []) as $pboffer) {
