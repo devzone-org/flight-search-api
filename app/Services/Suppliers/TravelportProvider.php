@@ -6,6 +6,8 @@ use App\Services\Contracts\SupplierInterface;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Cache;
 use App\Models\Supplier;
+use Illuminate\Support\Arr;
+use Carbon\Carbon;
 
 class TravelportProvider implements SupplierInterface
 {
@@ -166,43 +168,381 @@ class TravelportProvider implements SupplierInterface
     }
 
 
-    /**
-     * STEP 6: Convert Travelport JSON → common unified format
-     * This is what your frontend will consume.
+     /**
+     * Transform raw Travelport JSON into common format:
+     *
+     * {
+     *   supplier: "travelport",
+     *   search_id: "...",
+     *   references: { flights, products, brands, terms },
+     *   itineraries: [
+     *      {
+     *        id, offer_id, origin, destination, flight_refs[],
+     *        summary: {...},
+     *        fare_options: [ {...}, {...} ]
+     *      }
+     *   ]
+     * }
      */
-    protected function transformToCommon(array $resp, array $search): array
+    public function transformToCommon(array $response): array
     {
-        return $resp;
-        // Simplified version (complete version already shared earlier)
-        $offers = [];
+        // ------------------------------------------------------------
+        // 0) Detect structure (ReferenceList may be under root or under CatalogProductOfferings)
+        // ------------------------------------------------------------
+        $root    = Arr::get($response, 'CatalogProductOfferingsResponse', []);
+        $catalog = Arr::get($root, 'CatalogProductOfferings', []);
 
-        $offerings = $resp['CatalogProductOfferingsResponse']['CatalogProductOfferings']['CatalogProductOffering'] ?? [];
+        $referenceListA = Arr::get($catalog, 'ReferenceList', []);
+        $referenceListB = Arr::get($root, 'ReferenceList', []);
+        $referenceList  = $referenceListA ?: $referenceListB;
 
-        foreach ($offerings as $o) {
+        $searchId = Arr::get($catalog, 'Identifier.value')
+            ?? Arr::get($root, 'Identifier.value')
+            ?? null;
 
-            $pboList = $o['ProductBrandOptions'] ?? [];
+        $offerings = Arr::get($catalog, 'CatalogProductOffering', [])
+            ?: Arr::get($root, 'CatalogProductOffering', []);
 
-            foreach ($pboList as $pbo) {
-                $brandOfferings = $pbo['ProductBrandOffering'] ?? [];
+        // ------------------------------------------------------------
+        // 1) Build reference maps (flights, products, brands, terms)
+        // ------------------------------------------------------------
+        $flights  = [];
+        $products = [];
+        $brands   = [];
+        $terms    = [];
 
-                foreach ($brandOfferings as $offering) {
-                    $price = $offering['BestCombinablePrice'] ?? null;
+        foreach ($referenceList as $list) {
+            $type = $list['@type'] ?? null;
 
-                    $offers[] = [
-                        "supplier" => "travelport",
-                        "offer_id" => $o['id'],
-                        "price" => [
-                            "currency" => $price['CurrencyCode']['value'] ?? null,
-                            "base"     => $price['Base'] ?? 0,
-                            "taxes"    => $price['TotalTaxes'] ?? 0,
-                            "total"    => $price['TotalPrice'] ?? 0,
-                        ],
-                        "meta" => $o
-                    ];
+            if ($type === 'ReferenceListFlight') {
+                foreach ($list['Flight'] ?? [] as $item) {
+                    $flights[$item['id']] = $item;
+                }
+            }
+
+            if ($type === 'ReferenceListProduct') {
+                foreach ($list['Product'] ?? [] as $item) {
+                    $products[$item['id']] = $this->normalizeProduct($item);
+                }
+            }
+
+            if ($type === 'ReferenceListBrand') {
+                foreach ($list['Brand'] ?? [] as $item) {
+                    $brands[$item['id']] = $item;
+                }
+            }
+
+            if ($type === 'ReferenceListTermsAndConditions') {
+                foreach ($list['TermsAndConditions'] ?? [] as $item) {
+                    $terms[$item['id']] = $item;
                 }
             }
         }
 
-        return $offers;
+        // ------------------------------------------------------------
+        // 2) Build itineraries = (offering + flight_refs) group
+        //    Each itinerary has multiple fare_options (product+brand)
+        // ------------------------------------------------------------
+        $itinerariesByKey = [];
+
+        foreach ($offerings as $offering) {
+
+            $offerId     = Arr::get($offering, 'id');
+            $origin      = Arr::get($offering, 'Departure');
+            $destination = Arr::get($offering, 'Arrival');
+
+            foreach (Arr::get($offering, 'ProductBrandOptions', []) as $pbo) {
+
+                $flightRefs = Arr::get($pbo, 'flightRefs', []);
+                if (empty($flightRefs)) {
+                    continue;
+                }
+
+                // key = offering + same flight refs => same physical routing
+                $itiKey = $this->buildItineraryKey($offerId, $flightRefs);
+
+                // Create itinerary shell if first time
+                if (! isset($itinerariesByKey[$itiKey])) {
+                    $stopCount = max(count($flightRefs) - 1, 0);
+
+                    $itinerariesByKey[$itiKey] = [
+                        'id'          => $itiKey,
+                        'supplier'    => $this->code(),
+                        'search_id'   => $searchId,
+                        'offer_id'    => $offerId,
+                        'origin'      => $origin,
+                        'destination' => $destination,
+                        'flight_refs' => $flightRefs,
+
+                        'summary' => [
+                            'stops'               => $stopCount,
+                            'is_direct'           => $stopCount === 0,
+                            'has_stops'           => $stopCount > 0,
+
+                            'duration'            => null,
+                            'duration_minutes'    => null,
+                            'main_cabin'          => null,
+                            'main_passenger_type' => null,
+
+                            'departure_time'      => null,
+                            'arrival_time'        => null,
+
+                            'cheapest_price'      => null,
+                        ],
+
+                        'fare_options' => [],
+                    ];
+                }
+
+                $itinerary =& $itinerariesByKey[$itiKey];
+
+                // For each brand/product/price variant add a fare_option
+                foreach (Arr::get($pbo, 'ProductBrandOffering', []) as $pboffer) {
+
+                    $productRef = Arr::get($pboffer, 'Product.0.productRef');
+                    $brandRef   = Arr::get($pboffer, 'Brand.BrandRef');
+                    $termsRef   = Arr::get($pboffer, 'TermsAndConditions.termsAndConditionsRef');
+                    $comboCodes = Arr::get($pboffer, 'CombinabilityCode', []);
+
+                    $priceBlock       = Arr::get($pboffer, 'BestCombinablePrice', []);
+                    $priceSummary     = $this->normalizePrice($priceBlock);
+                    $passengerPricing = $this->normalizePriceBreakdown(
+                        Arr::get($priceBlock, 'PriceBreakdown', [])
+                    );
+
+                    $product = $products[$productRef] ?? null;
+                    $mainPax = $product['main_pax'] ?? 'ADT';
+                    $cabin   = Arr::get($product, "passenger_products.$mainPax.cabin");
+
+                    // ---------- fill departure / arrival time (once) ----------
+                    if ($itinerary['summary']['departure_time'] === null && isset($flightRefs[0])) {
+                        $firstRef    = $flightRefs[0];
+                        $firstFlight = $flights[$firstRef] ?? null;
+
+                        if ($firstFlight) {
+                            $depDate = Arr::get($firstFlight, 'Departure.date');
+                            $depTime = Arr::get($firstFlight, 'Departure.time');
+                            if ($depDate && $depTime) {
+                                $itinerary['summary']['departure_time'] = $depDate . 'T' . $depTime;
+                            }
+                        }
+                    }
+
+                    if ($itinerary['summary']['arrival_time'] === null && !empty($flightRefs)) {
+                        $lastRef    = $flightRefs[count($flightRefs) - 1];
+                        $lastFlight = $flights[$lastRef] ?? null;
+
+                        if ($lastFlight) {
+                            $arrDate = Arr::get($lastFlight, 'Arrival.date');
+                            $arrTime = Arr::get($lastFlight, 'Arrival.time');
+                            if ($arrDate && $arrTime) {
+                                $itinerary['summary']['arrival_time'] = $arrDate . 'T' . $arrTime;
+                            }
+                        }
+                    }
+
+                    // ---------- add fare option ----------
+                    $fareOption = [
+                        'id'                  => $this->offerId($offerId, $productRef, $brandRef),
+                        'product_ref'         => $productRef,
+                        'brand_ref'           => $brandRef,
+                        'terms_ref'           => $termsRef,
+                        'combinability_code'  => $comboCodes,
+
+                        'cabin'               => $cabin,
+                        'main_passenger_type' => $mainPax,
+
+                        'pricing' => [
+                            'currency'      => $priceSummary['currency'],
+                            'base'          => $priceSummary['base'],
+                            'taxes'         => $priceSummary['taxes'],
+                            'fees'          => $priceSummary['fees'],
+                            'surcharges'    => $priceSummary['surcharges'],
+                            'total'         => $priceSummary['total'],
+                            'per_passenger' => $passengerPricing,
+                        ],
+                    ];
+
+                    $itinerary['fare_options'][] = $fareOption;
+
+                    // ---------- fill duration / cabin / main pax ----------
+                    if ($itinerary['summary']['duration'] === null && $product) {
+                        $durationIso = $product['total_duration'] ?? null;
+                        $itinerary['summary']['duration']         = $durationIso;
+                        $itinerary['summary']['duration_minutes'] = $this->isoToMinutes($durationIso);
+                    }
+
+                    if ($itinerary['summary']['main_passenger_type'] === null) {
+                        $itinerary['summary']['main_passenger_type'] = $mainPax;
+                    }
+
+                    if ($itinerary['summary']['main_cabin'] === null && $cabin) {
+                        $itinerary['summary']['main_cabin'] = $cabin;
+                    }
+
+                    // ---------- track cheapest fare for card price ----------
+                    $total = $priceSummary['total'] ?? null;
+                    if ($total !== null) {
+                        $cheapest = $itinerary['summary']['cheapest_price'];
+                        if ($cheapest === null || $total < $cheapest['total']) {
+                            $itinerary['summary']['cheapest_price'] = [
+                                'currency'   => $priceSummary['currency'],
+                                'base'       => $priceSummary['base'],
+                                'taxes'      => $priceSummary['taxes'],
+                                'fees'       => $priceSummary['fees'],
+                                'surcharges' => $priceSummary['surcharges'],
+                                'total'      => $total,
+                            ];
+                        }
+                    }
+                }
+            }
+        }
+
+        // ------------------------------------------------------------
+        // Final output
+        // ------------------------------------------------------------
+        return [
+            'supplier'  => $this->code(),
+            'search_id' => $searchId,
+
+            'references' => [
+                'flights'  => $flights,
+                'products' => $products,
+                'brands'   => $brands,
+                'terms'    => $terms,
+            ],
+
+            'itineraries' => array_values($itinerariesByKey),
+        ];
+    }
+
+    // ========================= Helpers ==============================
+
+    private function normalizeProduct(array $p): array
+    {
+        $id = $p['id'];
+
+        $segments = [];
+        foreach ($p['FlightSegment'] ?? [] as $seg) {
+            $segments[] = [
+                'sequence'   => $seg['sequence'] ?? null,
+                'flight_ref' => Arr::get($seg, 'Flight.FlightRef'),
+                'duration'   => $seg['duration'] ?? null,
+                'connection' => $seg['connectionDuration'] ?? null,
+            ];
+        }
+
+        $pax = [];
+        foreach ($p['PassengerFlight'] ?? [] as $pf) {
+            $type = $pf['passengerTypeCode'] ?? null;
+            if (! $type) {
+                continue;
+            }
+
+            foreach ($pf['FlightProduct'] ?? [] as $fp) {
+                $pax[$type] = [
+                    'class_of_service' => $fp['classOfService'] ?? null,
+                    'cabin'            => $fp['cabin'] ?? null,
+                    'fare_basis_code'  => $fp['fareBasisCode'] ?? null,
+                    'fare_type'        => $fp['fareType'] ?? null,
+                    'fare_type_code'   => $fp['fareTypeCode'] ?? null,
+                    'brand_ref'        => Arr::get($fp, 'Brand.BrandRef'),
+                ];
+            }
+        }
+
+        $mainPax = array_key_exists('ADT', $pax)
+            ? 'ADT'
+            : (array_key_first($pax) ?: null);
+
+        return [
+            'id'                 => $id,
+            'total_duration'     => $p['totalDuration'] ?? null,
+            'segments'           => $segments,
+            'passenger_products' => $pax,
+            'main_pax'           => $mainPax,
+        ];
+    }
+
+    private function normalizePrice(array $price): array
+    {
+        $currency = Arr::get($price, 'CurrencyCode.value');
+        $base     = Arr::get($price, 'Base', 0);
+        $taxes    = Arr::get($price, 'TotalTaxes', 0);
+        $fees     = Arr::get($price, 'TotalFees', 0);
+        $total    = Arr::get($price, 'TotalPrice', 0);
+
+        $surcharges = 0;
+        foreach (Arr::get($price, 'PriceBreakdown', []) as $pb) {
+            foreach (Arr::get($pb, 'Surcharges.Surcharge', []) as $s) {
+                $surcharges += Arr::get($s, 'value', 0);
+            }
+        }
+
+        return compact('currency', 'base', 'taxes', 'fees', 'surcharges', 'total');
+    }
+
+    private function normalizePriceBreakdown(array $breakdown): array
+    {
+        $res = [];
+
+        foreach ($breakdown as $pb) {
+            $amount = $pb['Amount'] ?? [];
+
+            $currency = Arr::get($amount, 'CurrencyCode.value');
+            $base     = Arr::get($amount, 'Base', 0);
+            $taxes    = Arr::get($amount, 'Taxes.TotalTaxes', 0);
+            $fees     = Arr::get($amount, 'Fees.TotalFees', 0);
+            $total    = Arr::get($amount, 'Total', 0);
+
+            $surcharges = 0;
+            foreach (Arr::get($pb, 'Surcharges.Surcharge', []) as $s) {
+                $surcharges += Arr::get($s, 'value', 0);
+            }
+
+            $res[] = [
+                'type'       => Arr::get($pb, 'requestedPassengerType'),
+                'quantity'   => Arr::get($pb, 'quantity', 1),
+                'currency'   => $currency,
+                'base'       => $base,
+                'taxes'      => $taxes,
+                'fees'       => $fees,
+                'surcharges' => $surcharges,
+                'total'      => $total,
+            ];
+        }
+
+        return $res;
+    }
+
+    private function offerId(?string $offeringId, ?string $productRef, ?string $brandRef): string
+    {
+        return implode('_', array_filter([$offeringId, $productRef, $brandRef]));
+    }
+
+    private function buildItineraryKey(string $offerId, array $flightRefs): string
+    {
+        return $offerId . ':' . implode('-', $flightRefs);
+    }
+
+    private function isoToMinutes(?string $iso): ?int
+    {
+        if (! $iso || ! str_starts_with($iso, 'PT')) {
+            return null;
+        }
+
+        $hours = 0;
+        $mins  = 0;
+
+        if (preg_match('/(\d+)H/', $iso, $h)) {
+            $hours = (int) $h[1];
+        }
+
+        if (preg_match('/(\d+)M/', $iso, $m)) {
+            $mins = (int) $m[1];
+        }
+
+        return $hours * 60 + $mins;
     }
 }
