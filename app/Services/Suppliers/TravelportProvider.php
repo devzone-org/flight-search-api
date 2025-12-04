@@ -26,7 +26,7 @@ class TravelportProvider implements SupplierInterface
 
 
     /**
-     * STEP 5: The Aggregator calls this. 
+     * STEP 5: The Aggregator calls this.
      * This function:
      * - gets token
      * - sends search request to Travelport
@@ -59,8 +59,7 @@ class TravelportProvider implements SupplierInterface
             ->throw()
             ->json();
 
-
-
+        // NOTE: pass $search into transformer so we can derive slice_index + direction
         return $this->transformToCommon($json, $search);
     }
 
@@ -69,13 +68,6 @@ class TravelportProvider implements SupplierInterface
      */
     protected function getAccessToken(): string
     {
-
-
-
-
-
-
-
         $key = 'tp_token_' . $this->supplier->id;
 
         return Cache::remember($key, 85000, function () {
@@ -100,9 +92,6 @@ class TravelportProvider implements SupplierInterface
 
     protected function buildRequestBody(array $search): array
     {
-
-
-
         $req = $search; // your search array
 
         // Build PassengerCriteria dynamically
@@ -152,7 +141,6 @@ class TravelportProvider implements SupplierInterface
             ];
         }
 
-
         return [
             "CatalogProductOfferingsQueryRequest" => [
                 "CatalogProductOfferingsRequest" => [
@@ -177,14 +165,14 @@ class TravelportProvider implements SupplierInterface
      *   references: { flights, products, brands, terms },
      *   itineraries: [
      *      {
-     *        id, offer_id, origin, destination, flight_refs[],
+     *        id, offer_id, origin, destination, slice_index, direction, flight_refs[],
      *        summary: {...},
      *        fare_options: [ {...}, {...} ]
      *      }
      *   ]
      * }
      */
-    public function transformToCommon(array $response): array
+    public function transformToCommon(array $response, array $search = []): array
     {
         // ------------------------------------------------------------
         // 0) Detect structure (ReferenceList may be under root or under CatalogProductOfferings)
@@ -202,6 +190,10 @@ class TravelportProvider implements SupplierInterface
 
         $offerings = Arr::get($catalog, 'CatalogProductOffering', [])
             ?: Arr::get($root, 'CatalogProductOffering', []);
+
+        // determine trip_type & slices meta (for slice_index + direction)
+        $tripType   = $search['trip_type'] ?? 'oneway';
+        $slicesMeta = $this->buildSlicesMeta($search);
 
         // ------------------------------------------------------------
         // 1) Build reference maps (flights, products, brands, terms)
@@ -251,6 +243,9 @@ class TravelportProvider implements SupplierInterface
             $origin      = Arr::get($offering, 'Departure');
             $destination = Arr::get($offering, 'Arrival');
 
+            // figure out which slice this (origin, destination) belongs to
+            $sliceMeta = $this->findSliceForItinerary($slicesMeta, (string) $origin, (string) $destination);
+
             foreach (Arr::get($offering, 'ProductBrandOptions', []) as $pbo) {
 
                 $flightRefs = Arr::get($pbo, 'flightRefs', []);
@@ -270,6 +265,12 @@ class TravelportProvider implements SupplierInterface
                         'supplier'    => $this->code(),
                         'search_id'   => $searchId,
                         'offer_id'    => $offerId,
+
+                        // NEW: these two indexes + trip_type
+                        'trip_type'   => $tripType,
+                        'slice_index' => $sliceMeta['index'] ?? 1,          // 1,2,3...
+                        'direction'   => $sliceMeta['direction'] ?? 'unknown', // outbound|inbound|multi|unknown
+
                         'origin'      => $origin,
                         'destination' => $destination,
                         'flight_refs' => $flightRefs,
@@ -418,6 +419,84 @@ class TravelportProvider implements SupplierInterface
     }
 
     // ========================= Helpers ==============================
+
+    /**
+     * Build slice meta from the original search:
+     * index: 1,2,3...
+     * direction: outbound|inbound|multi|unknown
+     */
+    protected function buildSlicesMeta(array $search): array
+    {
+        $tripType = $search['trip_type'] ?? 'oneway';
+        $slices   = [];
+
+        if ($tripType === 'oneway') {
+            $slices[] = [
+                'index'     => 1,
+                'from'      => $search['from'] ?? null,
+                'to'        => $search['to'] ?? null,
+                'direction' => 'outbound',
+            ];
+        } elseif (in_array($tripType, ['round', 'roundtrip'], true)) {
+            $from = $search['from'] ?? null;
+            $to   = $search['to'] ?? null;
+
+            $slices[] = [
+                'index'     => 1,
+                'from'      => $from,
+                'to'        => $to,
+                'direction' => 'outbound',
+            ];
+            $slices[] = [
+                'index'     => 2,
+                'from'      => $to,
+                'to'        => $from,
+                'direction' => 'inbound',
+            ];
+        } elseif ($tripType === 'multicity') {
+            foreach ($search['slices'] ?? [] as $i => $slice) {
+                $slices[] = [
+                    'index'     => $i + 1,
+                    'from'      => $slice['from'] ?? null,
+                    'to'        => $slice['to'] ?? null,
+                    'direction' => 'multi',
+                ];
+            }
+        }
+
+        // fallback if nothing built
+        if (empty($slices)) {
+            $slices[] = [
+                'index'     => 1,
+                'from'      => $search['from'] ?? null,
+                'to'        => $search['to'] ?? null,
+                'direction' => 'unknown',
+            ];
+        }
+
+        return $slices;
+    }
+
+    /**
+     * Match an itinerary (origin/destination) to a slice.
+     */
+    protected function findSliceForItinerary(array $slicesMeta, ?string $origin, ?string $destination): array
+    {
+        foreach ($slicesMeta as $slice) {
+            if (
+                ($slice['from'] ?? null) === $origin &&
+                ($slice['to'] ?? null) === $destination
+            ) {
+                return $slice;
+            }
+        }
+
+        // default if no exact match
+        return [
+            'index'     => 1,
+            'direction' => 'unknown',
+        ];
+    }
 
     private function normalizeProduct(array $p): array
     {
