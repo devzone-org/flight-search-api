@@ -132,7 +132,7 @@ class TravelportProvider implements SupplierInterface
         ];
 
         // Optional round-trip block
-        if ($req['trip_type'] === "round" && $req['return']) {
+        if ($req['trip_type'] === "roundtrip" && $req['return']) {
             $searchCriteriaFlight[] = [
                 "@type" => "SearchCriteriaFlight",
                 "departureDate" => $req['return'],
