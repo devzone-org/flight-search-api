@@ -12,11 +12,24 @@ use Carbon\Carbon;
 class TravelportProvider implements SupplierInterface
 {
     protected Supplier $supplier;
+    public
+        $base_url,
+        $settings,
+        $credentials;
 
 
     public function __construct(Supplier $supplier)
     {
         $this->supplier = $supplier;
+
+        $settings = $this->supplier->settings; // JSON field
+        $settings = json_decode($settings, true);
+        $this->settings = $settings;
+
+        $this->base_url = $this->settings['base_url'];
+
+        $creds = $this->supplier->credentials; // JSON field
+        $this->credentials = json_decode($creds, true);
     }
 
     public function code(): string
@@ -546,11 +559,11 @@ class TravelportProvider implements SupplierInterface
 
     private function normalizePrice(array $price): array
     {
-        $currency = Arr::get($price, 'CurrencyCode.value');
-        $base     = Arr::get($price, 'Base', 0);
-        $taxes    = Arr::get($price, 'TotalTaxes', 0);
-        $fees     = Arr::get($price, 'TotalFees', 0);
-        $total    = Arr::get($price, 'TotalPrice', 0);
+        $currency = Arr::get($price, 'OfferListResponse.OfferID.0.Price.CurrencyCode.value', null);
+        $base     = Arr::get($price, 'OfferListResponse.OfferID.0.Price.Base', 0);
+        $taxes    = Arr::get($price, 'OfferListResponse.OfferID.0.Price.TotalTaxes', 0);
+        $fees     = Arr::get($price, 'OfferListResponse.OfferID.0.Price.TotalFees', 0);
+        $total    = Arr::get($price, 'OfferListResponse.OfferID.0.Price.TotalPrice', 0);
 
         $surcharges = 0;
         foreach (Arr::get($price, 'PriceBreakdown', []) as $pb) {
@@ -623,5 +636,217 @@ class TravelportProvider implements SupplierInterface
         }
 
         return $hours * 60 + $mins;
+    }
+
+
+    public function getQuote(array $data): array
+    {
+        $offer_id = explode(':',$data['offer_id']);
+        $offer_id = $offer_id[0] ?? '';
+
+        $body = [
+            '@type' => 'OfferQueryBuildFromCatalogProductOfferings',
+            'BuildFromCatalogProductOfferingsRequest' => [
+                '@type' => 'BuildFromCatalogProductOfferingsRequestAir',
+                'CatalogProductOfferingsIdentifier' => [
+                    'Identifier' => [
+                        'value' => $data['search_id']
+                    ]
+                ],
+                'CatalogProductOfferingSelection' => [
+                    [
+                        'CatalogProductOfferingIdentifier' => [
+                            'Identifier' => [
+                                'value' => $offer_id
+                            ]
+                        ],
+                        'ProductIdentifier' => [
+                            [
+                                'Identifier' => [
+                                    'value' => $data['product_ref']
+                                ]
+                            ]
+                        ]
+                    ]
+                ],
+                'validateInventoryInd' => true
+            ]
+        ];
+
+        $json = Http::withHeaders($this->headerMaking())
+            ->post($this->base_url . '/air/price/offers/buildfromcatalogproductofferings', $body)
+            ->throw()
+            ->json();
+
+        return $this->normalizePrice($json);
+    }
+
+    public function bookFlight(array $data): array
+    {
+        $offer_id = explode(':',$data['offer_id']);
+        $offer_id = $offer_id[0] ?? '';
+
+        $session_id = $this->startSessionRequest();
+        $offer_id_from_add_offer = $this->addOffer($data, $offer_id, $session_id);
+        $travels_response = $this->addTravelers($data, $session_id);
+
+        if($travels_response['success'] === false){
+            return $travels_response;
+        }
+
+        if (in_array(null, $travels_response['traveler_ids'], true)) {
+            return ['message' => 'All Travels not registered.'];
+        }
+
+        $body = [
+            '@type' => 'ReservationQueryCommitReservation',
+        ];
+
+        $json = Http::withHeaders($this->headerMaking())
+            ->post($this->base_url . "/air/book/reservation/reservations/$session_id", $body)
+            ->throw()
+            ->json();
+
+        return $json;
+    }
+
+    private function headerMaking() :array
+    {
+        $token = $this->getAccessToken();
+
+        return [
+            'Authorization' => 'Bearer ' . $token,
+            'Accept' => 'application/json',
+            'Content-Type' => 'application/json',
+            'Accept-Encoding' => 'gzip, deflate',
+            'XAUTH_TRAVELPORT_ACCESSGROUP' => $this->credentials['XAUTH_TRAVELPORT_ACCESSGROUP'] ?? '',
+            'Accept-Version' => $this->settings['api_version'],
+            'Content-Version' => $this->settings['api_version'],
+            'taxBreakDown' => 'true'
+        ];
+    }
+
+    private function startSessionRequest()
+    {
+        $body = [
+            "@type" => "ReservationID",
+            "ReservationID" => []
+        ];
+        $json = Http::withHeaders($this->headerMaking())
+            ->post($this->base_url . '/air/book/session/reservationworkbench', $body)
+            ->throw()
+            ->json();
+
+        return $json['ReservationResponse']['Reservation']['Identifier']['value'] ?? null;
+    }
+
+    private function addOffer($data, $offer_id, $session_id)
+    {
+        $body = [
+            '@type' => 'OfferQueryBuildFromCatalogProductOfferings',
+            'BuildFromCatalogProductOfferingsRequest' => [
+                '@type' => 'BuildFromCatalogProductOfferingsRequestAir',
+                'CatalogProductOfferingsIdentifier' => [
+                    'Identifier' => [
+                        'value' => $data['search_id']
+                    ]
+                ],
+                'CatalogProductOfferingSelection' => [
+                    [
+                        'CatalogProductOfferingIdentifier' => [
+                            'Identifier' => [
+                                'value' => $offer_id
+                            ]
+                        ],
+                        'ProductIdentifier' => [
+                            [
+                                'Identifier' => [
+                                    'value' => $data['product_ref']
+                                ]
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+        ];
+        $json = Http::withHeaders($this->headerMaking())
+            ->post($this->base_url . "/air/book/airoffer/reservationworkbench/{$session_id}/offers/buildfromcatalogproductofferings", $body)
+            ->throw()
+            ->json();
+
+        return $json['OfferListResponse']['OfferID']['Identifier']['value'] ?? null;
+    }
+
+    private function addTravelers($data, $session_id)
+    {
+        $response_array = [];
+        $passengers = $data['passengers'] ?? [];
+
+        foreach ($passengers as $passenger) {
+            $body = [
+                '@type' => 'Traveler',
+                'gender' => strtolower($passenger['gender']) == 'f' ? 'Female' : 'Male',
+                'birthDate' => $passenger['dob'] ?? null,
+                'id' => $passenger['key'],
+                'passengerTypeCode' => $passenger['type'] ?? null,
+                'PersonName' => [
+                    '@type' => 'PersonNameDetail',
+                    'Given' => $passenger['first_name'] ?? null,
+                    'Surname' => $passenger['last_name'] ?? null,
+                ],
+                'Telephone' => [
+                    [
+                        '@type' => 'Telephone',
+                        'countryAccessCode' => '1', // HardCoded
+                        'phoneNumber' => $data['contact']['phone'] ?? null,
+                        'id' => '4', //Hardcoded
+                        'cityCode' => 'ORD', // Hardcoded
+                        'role' => 'Home' // Hardcoded
+                    ]
+                ],
+                'Email' => [
+                    [
+                        'value' => $data['contact']['email'] ?? null,
+                    ]
+                ],
+                'TravelDocument' => [
+                    [
+                        '@type' => 'TravelDocumentDetail',
+                        'docNumber' => $passenger['passport_no'] ?? null,
+                        'docType' => 'Passport',
+                        'expireDate' => $passenger['passport_expiry'] ?? null,
+                        'issueCountry' => $passenger['nationality'] ?? null,
+                        'birthDate' => $passenger['dob'] ?? null,
+                        'Gender' => strtolower($passenger['gender']) == 'f' ? 'Female' : 'Male',
+                        'PersonName' => [
+                            '@type' => 'PersonName',
+                            'Given' => $passenger['first_name'] ?? null,
+                            'Surname' => $passenger['last_name'] ?? null,
+                        ]
+                    ]
+                ]
+            ];
+
+            $json = Http::withHeaders($this->headerMaking())
+                ->post($this->base_url . "/air/book/traveler/reservationworkbench/$session_id/travelers", $body)
+                ->throw()
+                ->json();
+
+            if(isset($json['TravelerResponse']['Result']['Error'][0]['Message'])){
+                return [
+                    'success' => false,
+                    'message' => $json['TravelerResponse']['Result']['Error'][0]['Message']
+                ];
+            }
+
+            $response_array[] = $json['TravelerResponse']['Traveler']['Identifier']['value'] ?? null;
+        }
+
+
+
+        return [
+            'success' => true,
+            'traveler_ids' => $response_array
+        ];
     }
 }

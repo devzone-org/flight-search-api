@@ -13,7 +13,10 @@ Route::middleware('auth:sanctum')->group(function () {
 
     // When POST /api/flights/search is called,
     // Laravel will execute FlightSearchController@search
-    
+
     Route::post('/flights/search', [FlightSearchController::class, 'search']);
+
+    Route::post('/flights/quote', [FlightSearchController::class, 'quoteRequest']);
+    Route::post('/flights/book', [FlightSearchController::class, 'bookRequest']);
 
 });
