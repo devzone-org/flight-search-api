@@ -20,3 +20,12 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('/flights/book', [FlightSearchController::class, 'bookRequest']);
 
 });
+
+Route::get('/fire-event', function () {
+    broadcast(new \App\Events\SupplierDataBroadcast([
+        'supplier_id' => 1,
+        'price' => rand(100, 500),
+    ]));
+
+    return 'Event Fired';
+});
