@@ -40,8 +40,6 @@ class FlightSearchController extends Controller
             'infants'   => 'nullable|integer|min:0',
         ]);
 
-
-
         // STEP 3: Send to Aggregator → cache, rules, suppliers
         $offers = $this->aggregator->search($agent, $data);
 

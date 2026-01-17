@@ -3,9 +3,11 @@
 
 namespace App\Services;
 
+use App\Jobs\SupplierWiseSearchFlight;
 use App\Models\User;
 use App\Services\AgentRuleService;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Log;
 
 
 /**
@@ -54,6 +56,15 @@ class FlightSearchAggregator
             abort(403, "You cannot search this route ({$normalized['from']} → {$normalized['to']}).");
         }
 
+        $suppliers = $this->checkForSuppliers($agent);
+
+        if(!empty($suppliers)){
+            foreach($suppliers as $supplier){
+                SupplierWiseSearchFlight::dispatch($supplier, $normalized);
+            }
+        }
+
+
         // 3) Create cache key for same search combinations
         $cacheKey = $this->buildCacheKey($normalized);
 
@@ -97,10 +108,16 @@ class FlightSearchAggregator
 
         foreach ($providers as $provider) {
             // Each provider returns "common format flight offers"
+
             $offers = $provider->searchFlights($normalized);
             $allOffers = array_merge($allOffers, $offers);
         }
 
         return $allOffers;
+    }
+
+    protected function checkForSuppliers(User $agent): array
+    {
+        return $this->agentRuleService->allowedSuppliersForSearch($agent);
     }
 }
