@@ -38,6 +38,7 @@ class FlightSearchController extends Controller
             'adults'    => 'required|integer|min:1',
             'children'  => 'nullable|integer|min:0',
             'infants'   => 'nullable|integer|min:0',
+            'channel_id'    => 'required|string',
         ]);
 
         // STEP 3: Send to Aggregator → cache, rules, suppliers

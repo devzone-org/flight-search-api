@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Cache;
 use App\Models\Supplier;
 use Illuminate\Support\Arr;
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Log;
 
 class TravelportProvider implements SupplierInterface
 {
@@ -37,6 +38,11 @@ class TravelportProvider implements SupplierInterface
         return 'travelport';
     }
 
+    protected function buildCacheKey(array $search): string
+    {
+        return 'flight_search:' . md5(json_encode($search));
+    }
+
 
     /**
      * STEP 5: The Aggregator calls this.
@@ -47,7 +53,16 @@ class TravelportProvider implements SupplierInterface
      */
     public function searchFlights(array $search): array
     {
+        $cache_key = $this->buildCacheKey($search);
 
+        return Cache::remember($cache_key, 60, function () use ($search) {
+            return $this->sendHttpRequestForOffers($search);
+        });
+    }
+
+    private function sendHttpRequestForOffers(array $search) :array
+    {
+        Log::info('Sending HTTP request to Travelport for offers...');
         $token = $this->getAccessToken();
 
         $body = $this->buildRequestBody($search);

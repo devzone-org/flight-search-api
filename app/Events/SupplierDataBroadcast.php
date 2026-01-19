@@ -13,15 +13,17 @@ use Illuminate\Queue\SerializesModels;
 class SupplierDataBroadcast implements ShouldBroadcast
 {
     public array $data;
+    public $channel_id;
 
-    public function __construct(array $data)
+    public function __construct(array $data, $channel_id)
     {
         $this->data = $data;
+        $this->channel_id = $channel_id;
     }
 
     public function broadcastOn()
     {
-        return new Channel('supplier-data');
+        return new Channel('supplier-data' . $this->channel_id);
     }
 
     public function broadcastAs()

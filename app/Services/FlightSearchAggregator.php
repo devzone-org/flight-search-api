@@ -64,6 +64,8 @@ class FlightSearchAggregator
             }
         }
 
+        return [];
+
 
         // 3) Create cache key for same search combinations
         $cacheKey = $this->buildCacheKey($normalized);
@@ -89,6 +91,7 @@ class FlightSearchAggregator
             'adults'    => (int) $search['adults'],
             'children'  => (int) ($search['children'] ?? 0),
             'infants'   => (int) ($search['infants'] ?? 0),
+            'channel_id'   => $search['channel_id'],
         ];
     }
 
