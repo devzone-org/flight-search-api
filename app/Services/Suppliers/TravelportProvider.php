@@ -574,11 +574,17 @@ class TravelportProvider implements SupplierInterface
 
     private function normalizePrice(array $price): array
     {
-        $currency = Arr::get($price, 'OfferListResponse.OfferID.0.Price.CurrencyCode.value', null);
-        $base     = Arr::get($price, 'OfferListResponse.OfferID.0.Price.Base', 0);
-        $taxes    = Arr::get($price, 'OfferListResponse.OfferID.0.Price.TotalTaxes', 0);
-        $fees     = Arr::get($price, 'OfferListResponse.OfferID.0.Price.TotalFees', 0);
-        $total    = Arr::get($price, 'OfferListResponse.OfferID.0.Price.TotalPrice', 0);
+//        $currency = Arr::get($price, 'OfferListResponse.OfferID.0.Price.CurrencyCode.value', null);
+//        $base     = Arr::get($price, 'OfferListResponse.OfferID.0.Price.Base', 0);
+//        $taxes    = Arr::get($price, 'OfferListResponse.OfferID.0.Price.TotalTaxes', 0);
+//        $fees     = Arr::get($price, 'OfferListResponse.OfferID.0.Price.TotalFees', 0);
+//        $total    = Arr::get($price, 'OfferListResponse.OfferID.0.Price.TotalPrice', 0);
+
+        $currency = Arr::get($price, 'CurrencyCode.value');
+        $base     = Arr::get($price, 'Base', 0);
+        $taxes    = Arr::get($price, 'TotalTaxes', 0);
+        $fees     = Arr::get($price, 'TotalFees', 0);
+        $total    = Arr::get($price, 'TotalPrice', 0);
 
         $surcharges = 0;
         foreach (Arr::get($price, 'PriceBreakdown', []) as $pb) {
