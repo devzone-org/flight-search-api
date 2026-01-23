@@ -202,7 +202,6 @@ class TravelportProvider implements SupplierInterface
      */
     public function transformToCommon(array $response, array $search = []): array
     {
-//        Log::debug('TP response', ['response' => $response, 'search' => $search]);
         // ------------------------------------------------------------
         // 0) Detect structure (ReferenceList may be under root or under CatalogProductOfferings)
         // ------------------------------------------------------------
@@ -477,6 +476,101 @@ class TravelportProvider implements SupplierInterface
                         }
                     }
 
+                    // ---------- brand details ----------
+                    $brand = $brands[$brandRef] ?? [];
+                    $brand_array = [
+                        'Carry-on baggage' => 'Not Offered',
+                        'Check-in baggage' => 'Not Offered',
+                        'Seat Selection' => 'Not Offered',
+                        'Meal' => 'Not Offered',
+                        'Modification' => 'Not Offered',
+                        'Cancellation' => 'Not Offered',
+                    ];
+                    if(!empty($brand)){
+                        $brand_details = Arr::get($brand, 'BrandAttribute', []);
+                        $brand_additional_details = Arr::get($brand, 'AdditionalBrandAttribute', []);
+                        $brand_details = array_merge($brand_details, $brand_additional_details);
+
+                        foreach ($brand_array as $key => $value) {
+                            $filter_key = '';
+                            if($key === 'Carry-on baggage'){
+                                $filter_key = 'CarryOn';
+                            }elseif($key === 'Check-in baggage'){
+                                $filter_key = 'CheckedBag';
+                            }elseif($key === 'Seat Selection'){
+                                $filter_key = 'SeatAssignment';
+                            }elseif($key === 'Meal'){
+                                $filter_key = 'Meals';
+                            }elseif($key === 'Modification'){
+                                $filter_key = 'Rebooking';
+                            }elseif($key === 'Cancellation'){
+                                $filter_key = 'Refund';
+                            }
+                            $filtered = array_filter(
+                                $brand_details,
+                                fn ($item) => ($item['classification'] ?? null) === $filter_key
+                            );
+                            $brand_array[$key] = array_values($filtered)[0]['inclusion'] ?? 'Not Offered';
+
+                        }
+                    }
+                    // ---------- end brand details ----------
+
+                    // ---------- add baggage details ----------
+//                    $terms_data = $terms[$termsRef] ?? [];
+//                    if(!empty($terms_data)){
+//                        $baggage_details = Arr::get($terms_data, 'BaggageAllowance', []);
+//                        $penalties = Arr::get($terms_data, 'Penalties', []);
+//                        $result = [];
+//                        if(!empty($baggage_details)){
+//                            foreach ($baggage_details as $baggage) {
+//
+//
+//                                // 1️⃣ Format baggage type
+//                                $type = $baggage['baggageType'] ?? ($baggage['@type'] ?? 'Unknown');
+//
+//                                // Split camelCase / PascalCase into words
+//                                $type_formatted = preg_replace('/([a-z])([A-Z])/', '$1 $2', $type);
+//                                $type_formatted = preg_replace('/([A-Z])([A-Z][a-z])/', '$1 $2', $type_formatted);
+//
+//                                // 2️⃣ Take the first baggage item safely
+//                                $first_item = $baggage['BaggageItem'][0] ?? [];
+//
+//                                // Quantity
+//                                $quantity = $first_item['quantity'] ?? 1;
+//
+//                                // Included in offer
+//                                $include_in_offer = $first_item['includedInOfferPrice'] ?? 'No';
+//                                $additional_cost = false;
+//                                if(strtolower($include_in_offer) === 'no'){
+//                                    // it means price will be applicable
+//                                    $additional_cost = true;
+//                                }
+//
+//                                // Weight if exists
+//                                $weight = null;
+//                                if (!empty($first_item['Measurement']) && is_array($first_item['Measurement'])) {
+//                                    $measure = $first_item['Measurement'][0] ?? [];
+//                                    if (isset($measure['value']) && isset($measure['unit'])) {
+//                                        $weight = $measure['value'] . ' ' . $measure['unit'];
+//                                    }
+//                                }
+//
+//                                if(!empty($weight)){
+//                                    $weight .= ' ' . $quantity . ' Piece';
+//                                }
+//                                $text = $first_item['Text'] ?? 'No baggage info available';
+//
+//                                $result[] = [
+//                                    'key' => $type_formatted,
+//                                    'value' => !empty($additional_cost) ? 'Additional Cost' : (!empty($weight) ? $weight : $text),
+//                                    'packet' => $baggage
+//                                ];
+//                            }
+//                        }
+//                    }
+                    // ---------- end baggage details ----------
+
                     // ---------- add fare option ----------
                     $fareOption = [
                         'id'                  => $this->offerId($offerId, $productRef, $brandRef),
@@ -484,6 +578,7 @@ class TravelportProvider implements SupplierInterface
                         'brand_ref'           => $brandRef,
                         'terms_ref'           => $termsRef,
                         'combinability_code'  => $comboCodes,
+                        'flight_additional_details' => $brand_array,
 
                         'cabin'               => $cabin,
                         'main_passenger_type' => $mainPax,
