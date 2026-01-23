@@ -369,7 +369,11 @@ class TravelportProvider implements SupplierInterface
                                 $airport = $next_row['departure_airport'] ?? null;
 
                                 if ($airport) {
-                                    $flight_stops[$airport] = $duration;
+                                    $airport_details = $airports_details[$airport] ?? [];
+                                    $city = is_array($airport_details) && !empty($airport_details['city'])
+                                        ? $airport_details['city']
+                                        : $airport;
+                                    $flight_stops[$city] = $duration;
                                 }
                             }
                         }
