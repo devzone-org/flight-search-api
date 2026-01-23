@@ -202,6 +202,7 @@ class TravelportProvider implements SupplierInterface
      */
     public function transformToCommon(array $response, array $search = []): array
     {
+//        Log::debug('TP response', ['response' => $response, 'search' => $search]);
         // ------------------------------------------------------------
         // 0) Detect structure (ReferenceList may be under root or under CatalogProductOfferings)
         // ------------------------------------------------------------
@@ -265,11 +266,16 @@ class TravelportProvider implements SupplierInterface
         // ------------------------------------------------------------
         $itinerariesByKey = [];
 
+        $airports_details = config('airports');
+
         foreach ($offerings as $offering) {
 
             $offerId     = Arr::get($offering, 'id');
             $origin      = Arr::get($offering, 'Departure');
             $destination = Arr::get($offering, 'Arrival');
+
+            $origin_airport_details = $airports_details[$origin] ?? [];
+            $destination_airport_details = $airports_details[$destination] ?? [];
 
             // figure out which slice this (origin, destination) belongs to
             $sliceMeta = $this->findSliceForItinerary($slicesMeta, (string) $origin, (string) $destination);
@@ -287,6 +293,88 @@ class TravelportProvider implements SupplierInterface
                 // Create itinerary shell if first time
                 if (! isset($itinerariesByKey[$itiKey])) {
                     $stopCount = max(count($flightRefs) - 1, 0);
+                    $flight_stops = [];
+
+                    if (!empty($stopCount) && $stopCount > 0 && is_array($flightRefs)) {
+
+                        $flight_stops_details = [];
+
+                        foreach ($flightRefs as $flight_ref) {
+
+                            if (empty($flights[$flight_ref])) {
+                                continue;
+                            }
+
+                            $reference = $flights[$flight_ref];
+
+                            $depDate = Arr::get($reference, 'Departure.date');
+                            $depTime = Arr::get($reference, 'Departure.time');
+                            $arrDate = Arr::get($reference, 'Arrival.date');
+                            $arrTime = Arr::get($reference, 'Arrival.time');
+
+                            // Skip if any required time value is missing
+                            if (!$depDate || !$depTime || !$arrDate || !$arrTime) {
+                                continue;
+                            }
+
+                            $departure_timestamp = strtotime($depDate . ' ' . $depTime);
+                            $arrival_timestamp   = strtotime($arrDate . ' ' . $arrTime);
+
+                            // Skip invalid timestamps
+                            if ($departure_timestamp === false || $arrival_timestamp === false) {
+                                continue;
+                            }
+
+                            $flight_stops_details[] = [
+                                'departure_airport' => Arr::get($reference, 'Departure.location', ''),
+                                'departure_time'    => $departure_timestamp,
+                                'arrival_airport'   => Arr::get($reference, 'Arrival.location', ''),
+                                'arrival_time'      => $arrival_timestamp,
+                            ];
+                        }
+
+                        $count = count($flight_stops_details);
+
+                        if ($count > 1) {
+
+                            for ($i = 0; $i < $count - 1; $i++) {
+
+                                $current_row = $flight_stops_details[$i];
+                                $next_row    = $flight_stops_details[$i + 1];
+
+                                // Absolute safety for missing keys
+                                if (
+                                    !isset($current_row['arrival_time'], $next_row['departure_time']) ||
+                                    !is_numeric($current_row['arrival_time']) ||
+                                    !is_numeric($next_row['departure_time'])
+                                ) {
+                                    continue;
+                                }
+
+                                $difference = max(0, $next_row['departure_time'] - $current_row['arrival_time']);
+
+                                $days    = intdiv($difference, 86400);
+                                $hours   = intdiv($difference % 86400, 3600);
+                                $minutes = intdiv($difference % 3600, 60);
+
+                                if ($days > 0) {
+                                    $duration = "{$days}d {$hours}h";
+                                } elseif ($hours > 0) {
+                                    $duration = "{$hours}h {$minutes}m";
+                                } else {
+                                    $duration = "{$minutes}m";
+                                }
+
+                                // Prevent undefined index
+                                $airport = $next_row['departure_airport'] ?? null;
+
+                                if ($airport) {
+                                    $flight_stops[$airport] = $duration;
+                                }
+                            }
+                        }
+                    }
+
 
                     $itinerariesByKey[$itiKey] = [
                         'id'          => $itiKey,
@@ -303,8 +391,23 @@ class TravelportProvider implements SupplierInterface
                         'destination' => $destination,
                         'flight_refs' => $flightRefs,
 
+                        'origin_details' => [
+                            'airport_code' => $origin,
+                            'airport' => $origin_airport_details['airport_name'] ?? null,
+                            'city' => $origin_airport_details['city'] ?? null,
+                            'country' => $origin_airport_details['country_name'] ?? null,
+                        ],
+
+                        'destination_details' => [
+                            'airport_code' => $destination,
+                            'airport' => $destination_airport_details['airport_name'] ?? null,
+                            'city' => $destination_airport_details['city'] ?? null,
+                            'country' => $destination_airport_details['country_name'] ?? null,
+                        ],
+
                         'summary' => [
                             'stops'               => $stopCount,
+                            'stops_details'       => $flight_stops,
                             'is_direct'           => $stopCount === 0,
                             'has_stops'           => $stopCount > 0,
 
