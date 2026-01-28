@@ -57,6 +57,8 @@ class FlightSearchController extends Controller
             'search_id'       => 'required|string',
             'offer_id'       => 'required|string',
             'product_ref'       => 'required|string',
+            'return_offer_id'   => 'nullable|string',
+            'return_product_ref' => 'nullable|string',
             'supplier'       => 'required|string',
         ]);
 
@@ -81,6 +83,8 @@ class FlightSearchController extends Controller
             'search_id'       => 'required|string',
             'offer_id'       => 'required|string',
             'product_ref'       => 'required|string',
+            'return_offer_id'   => 'nullable|string',
+            'return_product_ref' => 'nullable|string',
             'supplier'       => 'required|string',
             'contact.email' => 'required|email',
             'contact.phone' => 'required|string',
