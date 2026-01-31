@@ -12,7 +12,14 @@ use Illuminate\Support\Facades\Log;
 
 class TravelportProvider implements SupplierInterface
 {
+    // Typed supplier model injected into the provider.
+    // Holds the Supplier Eloquent model instance used for settings & credentials.
     protected Supplier $supplier;
+
+    // Public properties for configuration loaded from the Supplier model.
+    // - $base_url: the Travelport API base URL (string).
+    // - $settings: decoded settings array (from JSON).
+    // - $credentials: decoded credentials array (from JSON).
     public
         $base_url,
         $settings,
@@ -21,17 +28,25 @@ class TravelportProvider implements SupplierInterface
 
     public function __construct(Supplier $supplier)
     {
+        // Store the injected Supplier model for later use.
         $this->supplier = $supplier;
 
-        $settings = $this->supplier->settings; // JSON field
-        $settings = json_decode($settings, true);
-        $this->settings = $settings;
+        // The Supplier model stores a JSON string in the `settings` field.
+        // Decode it into an associative array for easy access.
+        $settings = $this->supplier->settings; // JSON field (string)
+        $settings = json_decode($settings, true); // decode to array
+        $this->settings = $settings; // save decoded settings
 
+        // Read the base URL from settings and assign to a dedicated property.
+        // Assumes settings contain a `base_url` key.
         $this->base_url = $this->settings['base_url'];
 
-        $creds = $this->supplier->credentials; // JSON field
-        $this->credentials = json_decode($creds, true);
+        // The Supplier model also stores credentials as a JSON string.
+        // Decode and keep them in $this->credentials for authenticated calls.
+        $creds = $this->supplier->credentials; // JSON field (string)
+        $this->credentials = json_decode($creds, true); // decode to array
     }
+
 
     public function code(): string
     {
@@ -62,28 +77,10 @@ class TravelportProvider implements SupplierInterface
 
     private function sendHttpRequestForOffers(array $search) :array
     {
-        Log::info('Sending HTTP request to Travelport for offers...');
-        $token = $this->getAccessToken();
-
         $body = $this->buildRequestBody($search);
 
-        $settings = $this->supplier->settings; // JSON field
-        $settings = json_decode($settings, true);
-
-        $creds = $this->supplier->credentials; // JSON field
-        $creds = json_decode($creds, true);
-
-        $json = Http::withHeaders([
-            'Authorization' => 'Bearer ' . $token,
-            'Accept' => 'application/json',
-            'Content-Type' => 'application/json',
-            'Accept-Encoding' => 'gzip, deflate',
-            'XAUTH_TRAVELPORT_ACCESSGROUP' => $creds['XAUTH_TRAVELPORT_ACCESSGROUP'] ?? '',
-            'Accept-Version' => $settings['api_version'],
-            'Content-Version' => $settings['api_version'],
-            'taxBreakDown' => 'true'
-        ])
-            ->post($settings['base_url'] . '/air/catalog/search/catalogproductofferings', $body)
+        $json = Http::withHeaders($this->headerMaking())
+            ->post($this->base_url . '/air/catalog/search/catalogproductofferings', $body)
             ->throw()
             ->json();
 
@@ -100,16 +97,14 @@ class TravelportProvider implements SupplierInterface
 
         return Cache::remember($key, 85000, function () {
 
-            $creds = $this->supplier->credentials; // JSON field
-            $creds = json_decode($creds, true);
             $resp = Http::asForm()
                 ->post($this->supplier->endpoint, [
-                    'grant_type'    => $creds['grant_type'] ?? null,
-                    'username'      => $creds['username'] ?? null,
-                    'password'      => $creds['password'] ?? null,
-                    'client_id'     => $creds['client_id'] ?? null,
-                    'client_secret' => $creds['client_secret'] ?? null,
-                    'scope'         => $creds['scope'] ?? null,
+                    'grant_type'    => $this->credentials['grant_type'] ?? null,
+                    'username'      => $this->credentials['username'] ?? null,
+                    'password'      => $this->credentials['password'] ?? null,
+                    'client_id'     => $this->credentials['client_id'] ?? null,
+                    'client_secret' => $this->credentials['client_secret'] ?? null,
+                    'scope'         => $this->credentials['scope'] ?? null,
                 ])
                 ->throw()
                 ->json();
@@ -118,14 +113,34 @@ class TravelportProvider implements SupplierInterface
         });
     }
 
+    /**
+     * Build the request body expected by Travelport's catalog search endpoint.
+     *
+     * - Uses the provided $search array to build PassengerCriteria and SearchCriteriaFlight.
+     * - Returns a wrapped structure under "CatalogProductOfferingsQueryRequest".
+     *
+     * Note: This function assumes keys like 'adults', 'children', 'infants', 'departure',
+     * 'from', 'to', 'trip_type' and optional 'return' exist in the $search array.
+     *
+     * @param array $search
+     * @return array
+     */
     protected function buildRequestBody(array $search): array
     {
-        $req = $search; // your search array
+        // Local alias for readability
+        $req = $search;
 
-        // Build PassengerCriteria dynamically
+        // -----------------------
+        // 1) Build PassengerCriteria
+        // -----------------------
+        // Travelport expects an array of PassengerCriteria objects, each with:
+        //  - @type: "PassengerCriteria"
+        //  - number: how many passengers of that type
+        //  - passengerTypeCode: ADT / CHD / INF
         $passengers = [];
 
-        if ($req['adults'] > 0) {
+        // Add adults if present and greater than zero
+        if (!empty($req['adults']) && $req['adults'] > 0) {
             $passengers[] = [
                 "@type" => "PassengerCriteria",
                 "number" => $req['adults'],
@@ -133,7 +148,8 @@ class TravelportProvider implements SupplierInterface
             ];
         }
 
-        if ($req['children'] > 0) {
+        // Add children if present and greater than zero
+        if (!empty($req['children']) && $req['children'] > 0) {
             $passengers[] = [
                 "@type" => "PassengerCriteria",
                 "number" => $req['children'],
@@ -141,7 +157,8 @@ class TravelportProvider implements SupplierInterface
             ];
         }
 
-        if ($req['infants'] > 0) {
+        // Add infants if present and greater than zero
+        if (!empty($req['infants']) && $req['infants'] > 0) {
             $passengers[] = [
                 "@type" => "PassengerCriteria",
                 "number" => $req['infants'],
@@ -149,7 +166,11 @@ class TravelportProvider implements SupplierInterface
             ];
         }
 
-        // Build Flight Search Array
+        // -----------------------
+        // 2) Build Flight Search Criteria (one or more slices)
+        // -----------------------
+        // Each SearchCriteriaFlight represents one flight slice with departureDate, From and To.
+        // Start with the first (outbound) slice using keys 'departure', 'from', 'to'.
         $searchCriteriaFlight = [
             [
                 "@type" => "SearchCriteriaFlight",
@@ -159,8 +180,9 @@ class TravelportProvider implements SupplierInterface
             ]
         ];
 
-        // Optional round-trip block
-        if ($req['trip_type'] === "roundtrip" && $req['return']) {
+        // If this is a round-trip and a return date is provided, add the inbound slice.
+        // The inbound slice swaps From/To compared to the outbound.
+        if (($req['trip_type'] ?? null) === "roundtrip" && !empty($req['return'])) {
             $searchCriteriaFlight[] = [
                 "@type" => "SearchCriteriaFlight",
                 "departureDate" => $req['return'],
@@ -169,19 +191,33 @@ class TravelportProvider implements SupplierInterface
             ];
         }
 
+        // -----------------------
+        // 3) Wrap into the final request structure
+        // -----------------------
+        // The top-level key expected by the API is "CatalogProductOfferingsQueryRequest"
+        // which contains "CatalogProductOfferingsRequest" with various options.
         return [
             "CatalogProductOfferingsQueryRequest" => [
                 "CatalogProductOfferingsRequest" => [
                     "@type" => "CatalogProductOfferingsRequestAir",
+
+                    // Pagination / limits
                     "offersPerPage" => 15,
                     "maxNumberOfUpsellsToReturn" => 4,
+
+                    // Content source hint (e.g. GDS)
                     "contentSourceList" => ["GDS"],
+
+                    // The passenger mix constructed above
                     "PassengerCriteria" => $passengers,
+
+                    // One or more search slices
                     "SearchCriteriaFlight" => $searchCriteriaFlight
                 ]
             ]
         ];
     }
+
 
 
     /**
@@ -927,12 +963,26 @@ class TravelportProvider implements SupplierInterface
             '@type' => 'ReservationQueryCommitReservation',
         ];
 
-        $json = Http::withHeaders($this->headerMaking())
+        $response = Http::withHeaders($this->headerMaking())
             ->post($this->base_url . "/air/book/reservation/reservations/$session_id", $body)
             ->throw()
             ->json();
 
-        return $json;
+        $error = Arr::get($response, 'ReservationResponse.Result.Error.0');
+
+        if ($error) {
+            $message = trim(
+                (Arr::get($error, 'category') ? Arr::get($error, 'category') . ': ' : '') .
+                Arr::get($error, 'Message', 'Unknown error during booking.')
+            );
+
+            return [
+                'success' => false,
+                'message' => $message,
+            ];
+        }
+
+        return $response;
     }
 
     private function headerMaking() :array
