@@ -58,6 +58,10 @@ class FlightSearchController extends Controller
             'offer_id'       => 'required|string',
             'product_ref'       => 'required|string',
             'supplier'       => 'required|string',
+
+            //For Return Tickets
+            'return_offer_id'   => 'nullable|string',
+            'return_product_ref' => 'nullable|string',
         ]);
 
         if(strtolower($data['supplier']) == 'travelport'){
@@ -85,6 +89,10 @@ class FlightSearchController extends Controller
             'contact.email' => 'required|email',
             'contact.phone' => 'required|string',
             'passengers' => 'required|array',
+
+            // Return Tickets Data
+            'return_offer_id'   => 'nullable|string',
+            'return_product_ref' => 'nullable|string',
         ]);
 
         if(strtolower($data['supplier']) == 'travelport'){

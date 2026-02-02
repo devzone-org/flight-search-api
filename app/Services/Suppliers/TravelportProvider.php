@@ -902,35 +902,48 @@ class TravelportProvider implements SupplierInterface
 
     public function getQuote(array $data): array
     {
-        $offer_id = explode(':',$data['offer_id']);
-        $offer_id = $offer_id[0] ?? '';
+        $offer_id = explode(':', $data['offer_id'])[0] ?? '';
+
+        $selections = [];
+
+        $make_selection = fn ($offer_id, $product_ref) => [
+            'CatalogProductOfferingIdentifier' => [
+                'Identifier' => [
+                    'value' => $offer_id,
+                ],
+            ],
+            'ProductIdentifier' => [
+                [
+                    'Identifier' => [
+                        'value' => $product_ref,
+                    ],
+                ],
+            ],
+        ];
+
+        $selections[] = $make_selection($offer_id, $data['product_ref']);
+
+        if (!empty($data['return_offer_id']) && !empty($data['return_product_ref'])) {
+            $return_offer_id = explode(':', $data['return_offer_id'])[0] ?? '';
+
+            $selections[] = $make_selection(
+                $return_offer_id,
+                $data['return_product_ref']
+            );
+        }
+
 
         $body = [
             '@type' => 'OfferQueryBuildFromCatalogProductOfferings',
             'BuildFromCatalogProductOfferingsRequest' => [
                 '@type' => 'BuildFromCatalogProductOfferingsRequestAir',
+                'validateInventoryInd' => true,
                 'CatalogProductOfferingsIdentifier' => [
                     'Identifier' => [
                         'value' => $data['search_id']
                     ]
                 ],
-                'CatalogProductOfferingSelection' => [
-                    [
-                        'CatalogProductOfferingIdentifier' => [
-                            'Identifier' => [
-                                'value' => $offer_id
-                            ]
-                        ],
-                        'ProductIdentifier' => [
-                            [
-                                'Identifier' => [
-                                    'value' => $data['product_ref']
-                                ]
-                            ]
-                        ]
-                    ]
-                ],
-                'validateInventoryInd' => true
+                'CatalogProductOfferingSelection' => $selections,
             ]
         ];
 
@@ -1017,6 +1030,32 @@ class TravelportProvider implements SupplierInterface
 
     private function addOffer($data, $offer_id, $session_id)
     {
+        $selections = [];
+
+        $make_selection = fn ($offer_id, $product_ref) => [
+            'CatalogProductOfferingIdentifier' => [
+                'Identifier' => [
+                    'value' => $offer_id,
+                ],
+            ],
+            'ProductIdentifier' => [
+                [
+                    'Identifier' => [
+                        'value' => $product_ref,
+                    ],
+                ],
+            ],
+        ];
+
+        $selections[] = $make_selection($offer_id, $data['product_ref']);
+
+        if (!empty($data['return_offer_id']) && !empty($data['return_product_ref'])) {
+            $selections[] = $make_selection(
+                explode(':', $data['return_offer_id'])[0],
+                $data['return_product_ref']
+            );
+        }
+
         $body = [
             '@type' => 'OfferQueryBuildFromCatalogProductOfferings',
             'BuildFromCatalogProductOfferingsRequest' => [
@@ -1026,22 +1065,7 @@ class TravelportProvider implements SupplierInterface
                         'value' => $data['search_id']
                     ]
                 ],
-                'CatalogProductOfferingSelection' => [
-                    [
-                        'CatalogProductOfferingIdentifier' => [
-                            'Identifier' => [
-                                'value' => $offer_id
-                            ]
-                        ],
-                        'ProductIdentifier' => [
-                            [
-                                'Identifier' => [
-                                    'value' => $data['product_ref']
-                                ]
-                            ]
-                        ]
-                    ]
-                ]
+                'CatalogProductOfferingSelection' => $selections
             ]
         ];
         $json = Http::withHeaders($this->headerMaking())
