@@ -32,7 +32,7 @@ class AgentRuleService
      */
     public function allowedSuppliersForSearch(User $agent): array
     {
-        return \App\Models\Supplier::where('is_active', 1)
+        return \App\Models\Supplier::where('status', 1)
             ->get()
             ->all();
     }

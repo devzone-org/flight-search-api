@@ -19,7 +19,7 @@ return new class extends Migration
             $table->string('endpoint')->nullable();
             $table->json('credentials')->nullable();   // All credentials here
             $table->json('settings')->nullable();
-            $table->boolean('is_active')->default(true);
+            $table->boolean('status')->default(true);
             $table->timestamps();
         });
     }
