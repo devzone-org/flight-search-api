@@ -12,7 +12,3 @@ Route::get('/create-token', function () {
 
     return ['token' => $token];
 });
-
-Route::get('/test', function () {
-    dd(1);
-});
