@@ -7,6 +7,7 @@ use App\Models\Supplier;
 use App\Services\FlightSearchAggregator;
 use App\Services\Suppliers\TravelportProvider;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 
 class FlightSearchController extends Controller
 {
@@ -26,6 +27,7 @@ class FlightSearchController extends Controller
      */
     public function search(Request $request)
     {
+        Log::info("Before search validation");
         $agent = $request->user(); // Authenticated agent from middleware
 
         // Validate request fields coming from agent portal
@@ -41,8 +43,12 @@ class FlightSearchController extends Controller
             'channel_id'    => 'required|string',
         ]);
 
+        Log::info("After search validation");
+
         // STEP 3: Send to Aggregator → cache, rules, suppliers
         $offers = $this->aggregator->search($agent, $data);
+
+        Log::info("After Offers");
 
         return response()->json(
              $offers,
