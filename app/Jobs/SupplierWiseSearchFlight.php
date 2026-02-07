@@ -35,6 +35,7 @@ class SupplierWiseSearchFlight implements ShouldQueue
         if(!empty($provider)){
             $offers = $provider->searchFlights($this->normalized);
         }
+        Log::info('offers', $offers);
 
         if(!empty($offers)){
             $redis_key = $this->normalized['channel_id'] . $this->supplier['code'];
